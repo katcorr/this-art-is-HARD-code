@@ -6,4 +6,4 @@ this art is . . .
 * **H**ighlighting **A**ctual **R**eal **D**ata (e.g., data published in scientific journals)
 * **H**oping to **A**mplify **R**esearch on racial **D**isparities in obstetrics & gynecology
 * **H**elping (more people) **A**ccess **R**eproductive medicine **D**ata
-* **H**olding **A**ccountable ~~**R**eal **D**icks~~ (all of us) 
+* **H**olding us **A**ccountable for **R**ectifying **D**isparities
