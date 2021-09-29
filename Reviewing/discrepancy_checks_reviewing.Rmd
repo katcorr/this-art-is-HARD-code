@@ -1,0 +1,157 @@
+---
+title: "Check for discrepancies in reviews"
+output: pdf_document
+header-includes: 
+- \usepackage{booktabs}
+- \usepackage{pdflscape}
+- \newcommand{\blandscape}{\begin{landscape}}
+- \newcommand{\elandscape}{\end{landscape}}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+# purpose: check for discrepancies between reviewers
+
+library(tidyverse)
+library(googlesheets4)
+library(kableExtra)
+```
+
+```{r, message=FALSE}
+# --------------------------- wrangle review data ------------------------------
+
+articles_reviewed0 <- read_sheet(ss = "https://docs.google.com/spreadsheets/d/1aZqj4n0It-bhIMRyOVb1oKalEX0EhOF5Q1w_oRQ0aKg/edit?usp=sharing") %>%
+  janitor::clean_names() %>%
+  select(doi, everything())
+
+# names(articles_reviewed0)
+# rename variables 
+#varnames <-  data.frame(old_varname = names(all_reviews))
+# ! DO NOT RUN THE LINE BELOW; DO NOT OVERWRITE varnames.csv !
+#write_csv(varnames, file="Reviewing/varnames.csv")
+varnames <- read_csv("varnames.csv") %>%
+  mutate(new_varname = ifelse(is.na(new_varname),yes=old_varname,no=new_varname)
+         , rename = paste(new_varname," = ", old_varname))
+
+tempvec <- varnames$old_varname
+names(tempvec) <- varnames$new_varname
+#tempvec
+myexprs <- purrr::map( tempvec, rlang::parse_expr )
+#myexprs
+
+articles_reviewed <- articles_reviewed0 %>%
+  rename( !!!myexprs ) %>%
+  # testing was done on 6/15 - remove testing obs
+  filter(as.Date(timestamp) > as.Date("2021-06-15"))
+```
+
+```{r}
+# --------------------------- number reviewed per reviewer ---------------------
+articles_reviewed %>%
+  count(reviewer_initials) %>%
+  kable(booktabs=TRUE)
+```
+
+```{r}
+# ---------------------------- dataset for comparisons -------------------------
+
+temp1 <- articles_reviewed %>%
+  arrange(doi, timestamp) %>%
+  group_by(doi) %>%
+  mutate(count = row_number())
+
+#temp1$count
+# first review
+dat1 <- temp1 %>% 
+  filter(count==1)
+
+# second review
+dat2 <- temp1 %>%
+  filter(count==2)
+
+dat1_long <- dat1 %>%
+  mutate(across(everything(), as.character)) %>%
+  select(-count) %>%
+  pivot_longer(cols=-c(doi,timestamp, reviewer_initials)
+               , names_to = "field"
+               , values_to = "value")
+
+dat2_long <- dat2 %>%
+  mutate(across(everything(), as.character)) %>%
+  select(-count) %>%
+  pivot_longer(cols=-c(doi,timestamp, reviewer_initials)
+               , names_to = "field"
+               , values_to = "value")
+
+check <- dat1_long %>%
+  inner_join(dat2_long, by = c('doi','field')) %>%
+  # convert to lower case and remove quotations to compare
+  mutate(value.x = str_remove(tolower(value.x),'["-]')
+        , value.y = str_remove(tolower(value.y),'["-]')) %>%
+  filter((value.x != value.y | (is.na(value.x) & !is.na(value.y) 
+                                | (!is.na(value.x)&is.na(value.y)))) 
+          & field != "email_address") %>%
+  ungroup()
+```
+
+```{r,eval=FALSE}
+# how many articles duplicate reviewed so far?
+tot <- dat1_long %>%
+  inner_join(dat2_long, by = c('doi','field')) 
+
+length(unique(tot$doi))
+
+# how many articles have any discrepancies that need fixing?
+length(unique(check$doi))
+
+check %>%
+  count(reviewer_initials.x,reviewer_initials.y)
+
+check %>%
+  distinct(doi, reviewer_initials.x, reviewer_initials.y) %>%
+  count(reviewer_initials.x,reviewer_initials.y)
+```
+
+\newpage
+\blandscape
+
+```{r results = "asis"}
+# --------------------------- comparisons by DOI ------------------------------
+# number of articles that have at least one discrepancy
+dois <- unique(check$doi)
+d <- length(dois)
+
+for (i in 1:d){
+  temp <- check %>%
+    filter(doi==dois[i]) %>%
+    select(doi, reviewer_initials.x, reviewer_initials.y, field, value.x, value.y)
+
+  print(
+    temp %>%
+      select(field, value.x, value.y) %>%
+      kable(booktabs=TRUE, longtable=TRUE
+            , caption=paste("DOI:", dois[i]
+                , "\\\\ Reviewer X:", unique(temp$reviewer_initials.x)
+                , "\\\\ Reviewer Y:", unique(temp$reviewer_initials.y))
+            , col.names = c("Field",unique(temp$reviewer_initials.x)
+                            , unique(temp$reviewer_initials.y))) %>%
+      kable_styling(latex_options = c("striped", "repeat_header")) %>%
+      column_spec(1, width = "7em") %>%
+      column_spec(2:3, width = "30em") 
+  )
+  
+  cat("\n\\newpage\n")
+}
+
+```
+
+\elandscape
+
+# SAVE PERMANENT DATASET
+
+```{r}
+# once discrepancies resolved, save permanent dataset with review results
+#saveRDS(articles_reviewed, file="Data/articles_reviewed.Rds")
+```
+

@@ -1,0 +1,222 @@
+---
+title: "Check for discrepancies in screening"
+output: pdf_document
+header-includes: 
+- \usepackage{booktabs}
+- \usepackage{pdflscape}
+- \newcommand{\blandscape}{\begin{landscape}}
+- \newcommand{\elandscape}{\end{landscape}}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+# purpose: check for discrepancies between screeners
+
+library(tidyverse)
+library(googlesheets4)
+library(kableExtra)
+```
+
+```{r, message=FALSE}
+# --------------------- bring screening data together --------------------------
+
+# reads in each screener's google spreadsheet and assigns correct initials
+read_screens <- function(sheetcode, init){
+  
+  full_link <- paste0("https://docs.google.com/spreadsheets/d/",sheetcode)
+  
+  dat <- read_sheet(ss = full_link) %>%
+    mutate(reader1init=init, reader2init=init)
+  
+  return(dat)
+  
+}
+
+screened_AB <- read_screens("1PhFYBkwrFm9Emkquj0N4pUY8VB3OC8eIiFQyo8Gbtk0/edit#gid=517754364", init="AB")
+screened_GR <- read_screens("1tR7q77pZCkUXlnd2AIZw4zPEdViYa-9NtCb-ku02tdY/edit#gid=2078190785", init="GR") %>%
+  rename(pmid=`367`)
+screened_JW <- read_screens("1YzjuzmKkTDHcbWRhMrJib8SNaix4aRue8U5Yue7vOtw/edit#gid=1065604673", init="JW")
+screened_KC <- read_screens("1McGw9fnS8OT3B6AfyQhXI-wx7Rtpwi2XITRllfyltvQ/edit#gid=516563490", init="KC")
+screened_MJ <- read_screens("1jvmpVDdSXam6DMl4Xv0wudKVGX7Y0cevylL22IpcujE/edit#gid=1261172038", init="MJ")
+screened_TH <- read_screens("142NKetGv4xyuC4DgLxMd0Czx8erKZGidRUEEqruCFe8/edit#gid=1367788957", init="TH")
+
+screened_all0 <- bind_rows(screened_AB, screened_GR, screened_JW, screened_KC
+                          , screened_MJ, screened_TH)
+
+# read in original file with screening assignments
+# to then merge with screened files
+screening_assignments <- readRDS("Data/screening_assignments.Rds")
+
+# shorten journal titles for printing
+screened_all <- screening_assignments %>%
+  left_join(screened_all0 %>%
+              rename(eligible_s1=eligible
+                     , reason_ineligible_s1=reason_ineligible
+                     , other_comments_s1=other_comments) %>%
+              select(pmid, doi, reader1init, eligible_s1, reason_ineligible_s1, other_comments_s1)
+            , by=c("pmid", "doi", "reader1init")) %>%
+  left_join(screened_all0 %>%
+              rename(eligible_s2=eligible
+                     , reason_ineligible_s2=reason_ineligible
+                     , other_comments_s2=other_comments) %>%
+              select(pmid, doi, reader2init, eligible_s2, reason_ineligible_s2, other_comments_s2)
+            , by=c("pmid", "doi", "reader2init")) %>%
+  # shorten journal titles for printing
+  mutate(journ = case_when(journal=="American journal of obstetrics and gynecology" ~ "AJOG"
+                           , str_detect(journal,"BJOG") ~ "BJOG"
+                           , str_detect(journal,"Fertility") ~ "F&S"
+                           , journal=="Gynecologic oncology" ~ "Gyn Onc"
+                           , journal=="Human reproduction (Oxford, England)" ~ "HR"
+                           , journal=="Human reproduction update" ~ "HRU"
+                           , journal=="Obstetrics and gynecology" ~ "Obs Gyn"
+                           , str_detect(journal,"Ultrasound") ~ "Ultrasound"))
+
+#count(screened_all, journal, journ)
+```
+
+
+```{r}
+# --------------------------- number eligible ----------------------------------
+
+# when no discrepancies remain, these should match exactly and give us a summary
+# of how many articles will be included in the review
+screened_all %>%
+  count(eligible_s1, eligible_s2) %>%
+  kable(booktabs=TRUE, caption="Agreement between screeners in article eligibility") %>%
+  kable_styling(latex_options = "striped")
+
+# --------------------------- eligibility by screener -------------------------
+
+screened_AB %>% count(eligible) %>% kable(booktabs=TRUE,caption="AB")
+screened_GR %>% count(eligible) %>% kable(booktabs=TRUE,caption="GR")
+screened_JW %>% count(eligible) %>% kable(booktabs=TRUE,caption="JW")
+screened_KC %>% count(eligible) %>% kable(booktabs=TRUE,caption="KC")
+screened_MJ %>% count(eligible) %>% kable(booktabs=TRUE,caption="MJ")
+screened_TH %>% count(eligible) %>% kable(booktabs=TRUE,caption="TH")
+```
+
+\newpage
+\blandscape
+
+```{r}
+# --------------------------- compare eligibility ------------------------------
+compare_elig <- screened_all %>%
+  # != doesn't compare the NAs
+  filter((eligible_s1 != eligible_s2) | is.na(eligible_s1) | is.na(eligible_s2))
+
+
+if (nrow(compare_elig)>0){
+  compare_elig %>%
+    select(pmid, journ, title, 
+           reader1init, eligible_s1, reason_ineligible_s1, other_comments_s1
+           , reader2init, eligible_s2, reason_ineligible_s2, other_comments_s2) %>%
+    kable(booktabs=TRUE, longtable=TRUE, caption="Discrepancies in 'eligible' field") %>%
+    add_header_above(c(" " = 3, "Screener 1" = 4, "Screener 2" = 4)) %>%
+    kable_styling(latex_options = c("striped", "repeat_header")) %>%
+    column_spec(3, width = "15em") %>%
+    column_spec(c(4:5,8:9), width = "2em") %>%
+    column_spec(c(6:7,10:11), width = "6em")
+}
+if (nrow(compare_elig)==0){
+  "No discrepancies in eligibility. Yay!" %>%
+    kable(caption="Discrepancies in 'eligible' field")
+}
+```
+
+\newpage
+
+```{r}
+# ---------------------------- compare reason ineligible -----------------------
+
+compare_reason_inelig <- screened_all %>%
+  filter(# flag if unequal
+         (reason_ineligible_s1 != reason_ineligible_s2) | 
+         # flag if one is missing and the other isn't
+         (is.na(reason_ineligible_s1) & !is.na(reason_ineligible_s2)) |
+         (!is.na(reason_ineligible_s1) & is.na(reason_ineligible_s2)) |
+         # also flag if study is ineligible but reason is missing
+         (eligible_s1=="No" & is.na(reason_ineligible_s1)) |
+         (eligible_s2=="No" & is.na(reason_ineligible_s2)))
+
+compare_reason_inelig %>%
+ select(pmid, journ, title, 
+         reader1init, eligible_s1, reason_ineligible_s1, other_comments_s1
+         , reader2init, eligible_s2, reason_ineligible_s2, other_comments_s2) %>%
+  kable(booktabs=TRUE, longtable=TRUE, caption="Discrepancies in 'reason ineligible' field") %>%
+  add_header_above(c(" " = 3, "Screener 1" = 4, "Screener 2" = 4)) %>%
+  kable_styling(latex_options = c("striped", "repeat_header")) %>%
+  column_spec(3, width = "15em") %>%
+  column_spec(c(4:5,8:9), width = "2em") %>%
+  column_spec(c(6:7,10:11), width = "6em")
+```
+
+\newpage
+
+```{r}
+# ------------------------------- compare comments ----------------------------
+
+# compare comments when "other" is selected for reason ineligible
+compare_comments1 <- screened_all %>%
+  filter(reason_ineligible_s2 == "other" | reason_ineligible_s2 == "other") 
+
+compare_comments1 %>%
+ select(pmid, journ, title, 
+         reader1init, eligible_s1, reason_ineligible_s1, other_comments_s1
+         , reader2init, eligible_s2, reason_ineligible_s2, other_comments_s2) %>%
+  kable(booktabs=TRUE, longtable=TRUE
+        , caption="Discrepancies in 'other comments' field when 'other' was selected as reason ineligible") %>%
+  add_header_above(c(" " = 3, "Screener 1" = 4, "Screener 2" = 4)) %>%
+  kable_styling(latex_options = c("striped", "repeat_header")) %>%
+  column_spec(3, width = "15em") %>%
+  column_spec(c(4:5,8:9), width = "2em") %>%
+  column_spec(c(6:7,10:11), width = "6em")
+
+```
+
+\newpage
+
+```{r}
+# ------------------------------- other comments -------------------------------
+
+# see comments for other cases (where 'other' is not selected but there's a comment)
+compare_comments2 <- screened_all %>%
+  filter((reason_ineligible_s1 != "other" & !is.na(other_comments_s1)) | 
+         (reason_ineligible_s2 != "other" & !is.na(other_comments_s2)))
+
+compare_comments2 %>%
+  select(pmid, journ, title, 
+         reader1init, eligible_s1, reason_ineligible_s1, other_comments_s1
+         , reader2init, eligible_s2, reason_ineligible_s2, other_comments_s2) %>%
+  kable(booktabs=TRUE, longtable=TRUE, caption="Other comments") %>%
+  add_header_above(c(" " = 3, "Screener 1" = 4, "Screener 2" = 4)) %>%
+  kable_styling(latex_options = c("striped", "repeat_header")) %>%
+  column_spec(3, width = "15em") %>%
+  column_spec(c(4:5,8:9), width = "2em") %>%
+  column_spec(c(6:7,10:11), width = "6em")
+```
+
+\elandscape
+
+# SAVE PERMANENT DATAFRAME
+
+```{r}
+# once discrepancies resolved, save permanent dataframe of screening results
+#saveRDS(screened_all, file="Data/articles_screened.Rds")
+
+# corrections to eligibility discovered during review
+screened_all_corrected <- screened_all %>%
+  filter(doi != "10.1016/j.ygyno.2020.04.700") %>%
+  bind_rows( screened_all %>% 
+               filter(doi == "10.1016/j.ygyno.2020.04.700") %>%
+               mutate(eligible_s1 = "No"
+                      , reason_ineligible_s1 = "not about racial disparities"
+                      , eligible_s2 = "No"
+                      , reason_ineligible_s2 = "not about racial disparities"
+                      , other_comments_s2 = "AA pop only")
+               )
+ 
+# once all reviewed, save permanent dataframe of corrected screening results
+#saveRDS(screened_all_corrected, file="Data/articles_screened_corrected.Rds")
+```
+
