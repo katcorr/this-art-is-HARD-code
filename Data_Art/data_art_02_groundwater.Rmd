@@ -1,0 +1,283 @@
+---
+title: "data_art_02_groundwater"
+author: "kat correia"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+library(tidyverse)
+library(jpeg) ## to import jpeg images into R
+library(ggpubr) ## to add image as background of ggplot
+library(gganimate) ## to add animation/movement to plot
+library(ggforce) ## for narrative
+```
+
+
+```{r}
+# ----------------------------- it's in the groundwater ------------------------
+# ideas: based on Table 3 in DOI: 10.1016/j.ajog.2021.02.028
+# - maternal mortality disparities increase as location becomes more rural
+# - like Alex's idea for "groundwater" but moving left -> right and have above-ground
+#    be increasingly rural (e.g. left is city; right is noncore) 
+# - the water goes through cracks to the upper and lower 95% CI limits
+#      (point estimate is in the middle)
+# - link to Racial Equity Institute's groundwater metaphor
+
+# ----------------------------- preparing data ---------------------------------
+
+# move up one folder to this-art-is-HARD to get to parent directory 
+setwd("./..")
+
+effects_table_pregcomp <- readRDS("Data/effects_table_pregcomp.Rds")
+
+PRMR_dat0 <- effects_table_pregcomp %>%
+  filter(doi=="10.1016/j.ajog.2021.02.028" & stratified=="Yes") 
+
+# need to add rows for Noncore
+noncore <- data.frame(stratified=rep("Yes",5), stratgrp=rep("urban-rural category - noncore",5)
+                      , outcome="pregnancy-related mortality"
+                      , measure="number of pregnancy-related deaths per 100,000 live births"
+                      , comparison=rep(6,5)
+                      , compare=c("White", "Black", "American Indian or Alaska Native"
+                                     , "Asian or Pacific Islander", "Hispanic")
+                      , point = c(19.7, 59.3, 37.5, NA_real_, 9.8)
+                      , lower = c(16.9, 46.2, 22.6, NA_real_, 4.9)
+                      , upper = c(22.8, 74.9, 58.6, NA_real_, 17.5))
+
+# join data together
+PRMR_dat <- PRMR_dat0 %>%
+  bind_rows(noncore) %>%
+  separate(stratgrp, into=c("blah","urban_rural"), sep=" - ") %>%
+  # order the categories correctly from most urban --> most rural
+  mutate(urban_rural = factor(urban_rural, levels = c("large metro", "medium metro", "small metro", "micropolitan", "noncore"))
+         , compare_fct = factor(compare, levels = c("White", "Hispanic", "Asian or Pacific Islander", "American Indian or Alaska Native", "Black")))
+```
+
+### basic figures with y-axis reversed
+
+```{r}
+# basic fig
+ggplot(data=PRMR_dat, aes(x=urban_rural, y=point, color=compare)) +
+  geom_point(position=position_dodge(.9))+
+  geom_errorbar(aes(ymin=lower, ymax=upper), width=.2,
+                 position=position_dodge(.9)) +
+  scale_y_reverse() +
+  labs(x="", y="PRMR (95% CI)", color = "") 
+
+# basic fig - trying to distinguish urban-rural better
+ggplot(data=PRMR_dat, aes(x=urban_rural, y=point, color=compare)) +
+  geom_point(position=position_dodge(.9))+
+  geom_errorbar(aes(ymin=lower, ymax=upper, lty=urban_rural), width=.2,
+                 position=position_dodge(.9)) +
+  scale_y_reverse() +
+  labs(x="", y="PRMR (95% CI)", color = "") +
+  guides(lty="none")
+
+# easier to see if sort by race category instead of urban rural category?
+ggplot(data=PRMR_dat, aes(x=compare_fct, y=point, color=urban_rural)) +
+  geom_point(position=position_dodge(.9))+
+  geom_errorbar(aes(ymin=lower, ymax=upper, lty=compare_fct), width=.2,
+                 position=position_dodge(.9)) +
+  scale_y_reverse() +
+  labs(x="", y="PRMR (95% CI)", color = "") +
+  guides(lty="none") +
+  theme(axis.text.x = element_text(angle = 30)
+        , text = element_text(size = 20))
+```
+
+### image as background
+
+```{r}
+# joy won's images (above ground)! 
+# below ground: poisson disc sampling in R
+# https://coolbutuseless.github.io/2019/06/25/poissoned-a-package-for-poisson-disc-sampling/
+# https://www.williamrchase.com/post/textures-and-geometric-shapes-12-months-of-art-july/
+# to do: update below ground so just a gradient?
+img1 <- readJPEG("images/surf-ombre.jpg")
+img2 <- readJPEG("images/surf-ombre2.jpg")
+img3 <- readJPEG("images/surf-city-landscape.jpg")
+  
+# ------------------------- set up dat  --------------------------
+
+PRMR_updated3 <- PRMR_dat %>%
+  arrange(compare_fct, urban_rural) %>%
+  mutate(loc = row_number()*4 - 2)
+
+# generate sequence between lower and upper
+PRMR_updated4 <- data.frame()
+for (i in 1:nrow(PRMR_updated3)){
+  if (!is.na(PRMR_updated3$lower[i])){
+    y_prmr <- seq(PRMR_updated3$lower[i],PRMR_updated3$upper[i],by=0.5)
+    temp <- as.data.frame(y_prmr) %>%
+      bind_cols(PRMR_updated3[i,])
+    PRMR_updated4 <- bind_rows(PRMR_updated4,temp)
+  }
+}
+
+# create path that isn't straight
+PRMR_updated4 <- PRMR_updated4 %>%
+  mutate(xnew = jitter(loc))
+
+# ------------------------- plot  --------------------------
+
+gw1 <- ggplot() +
+  background_image(img1) +
+  geom_path(data=PRMR_updated4, aes(x=xnew, y=y_prmr, group=loc, color=compare_fct)
+            , size=1) +
+  scale_color_brewer(palette="Blues") +
+  scale_y_reverse(limits=c(80,-90)) +
+  guides(color="none") +
+  theme_void()
+
+gw1
+
+# ------------------------------- animate the water dripping down -----------
+
+gw1_anim <- gw1 +
+  transition_reveal(along = y_prmr) +
+  ease_aes("cubic-in") +
+  enter_grow() +
+  enter_fade(alpha = 0.8)
+
+#animate(gw1_anim, nframes = 100, fps = 5)
+
+
+# ------------------------- other images  --------------------------
+
+gw2 <- ggplot() +
+  background_image(img2) +
+  geom_path(data=PRMR_updated4, aes(x=xnew, y=y_prmr, group=loc, color=compare_fct)
+            , size=1) +
+  scale_color_brewer(palette="Blues") +
+  scale_y_reverse(limits=c(80,-120)) +
+  guides(color="none") +
+  theme_void()
+
+gw2
+
+gw2_anim <- gw2 +
+  transition_reveal(along = y_prmr) +
+  ease_aes("cubic-in") +
+  enter_grow() +
+  enter_fade(alpha = 0.8)
+
+#animate(gw2_anim, nframes = 100, fps = 5)
+
+gw3 <- ggplot() +
+  background_image(img3) +
+  geom_path(data=PRMR_updated4, aes(x=xnew, y=y_prmr, group=loc, color=compare_fct)
+            , size=1) +
+  scale_color_brewer(palette="Blues") +
+  scale_y_reverse(limits=c(80,-120)) +
+  guides(color="none") +
+  theme_void()
+
+gw3
+
+gw3_anim <- gw3 +
+  transition_reveal(along = y_prmr) +
+  ease_aes("cubic-in") +
+  enter_grow() +
+  enter_fade(alpha = 0.8)
+
+#animate(gw3_anim, nframes = 100, fps = 5)
+
+
+
+# ------------------- set up dat to group by city -> country -------------------
+
+PRMR_updated5 <- PRMR_dat %>%
+  arrange(urban_rural,compare_fct) %>%
+  mutate(loc = row_number()*4 - 2)
+
+# generate sequence between lower and upper
+PRMR_updated6 <- data.frame()
+for (i in 1:nrow(PRMR_updated5)){
+  if (!is.na(PRMR_updated5$lower[i])){
+    y_prmr <- seq(PRMR_updated5$lower[i],PRMR_updated5$upper[i],by=0.5)
+    temp <- as.data.frame(y_prmr) %>%
+      bind_cols(PRMR_updated5[i,])
+    PRMR_updated6 <- bind_rows(PRMR_updated6,temp)
+  }
+}
+
+# create path that isn't straight
+PRMR_updated6 <- PRMR_updated6 %>%
+  mutate(xnew = jitter(loc))
+
+gw4 <- ggplot() +
+  background_image(img1) +
+  geom_path(data=PRMR_updated6, aes(x=xnew, y=y_prmr, group=loc, color=compare_fct)
+            , size=1) +
+  scale_color_brewer(palette="Blues") +
+  scale_y_reverse(limits=c(80,-90)) +
+  guides(color="none") +
+  theme_void()
+
+gw4
+
+gw6 <- ggplot() +
+  background_image(img2) +
+  geom_path(data=PRMR_updated6, aes(x=xnew, y=y_prmr, group=loc, color=compare_fct)
+            , size=1) +
+  scale_color_brewer(palette="Blues") +
+  scale_y_reverse(limits=c(80,-120)) +
+  guides(color="none") +
+  theme_void()
+
+gw6
+```
+
+
+# narrative
+
+```{r}
+# ggplot(iris, aes(Petal.Length, Petal.Width)) +
+#   geom_mark_ellipse(aes(fill = Species, label = Species)) +
+#   geom_point()
+
+# ----------------------------- color ---------------------------------------
+
+# generate random paths but as same start and of similar length
+legend1 <- data.frame(race=unique(PRMR_dat$compare_fct)
+                      , order=c(1,5,4,3,2)) %>%
+  expand_grid(y=seq(1,3,by=0.1)) %>%
+  mutate(x = jitter(order))
+
+
+ggplot(data=legend1, aes(x=x, y=y, group=order, color=race)) +
+   geom_path(size=1) +
+   scale_color_brewer(palette="Blues") +
+   ylim(c(-10,10)) +
+   xlim(c(-3,8)) +
+   theme_void() +
+   guides(color="none")
+
+ ggplot(data=legend1, aes(x=x, y=y, group=order, color=race)) +
+   geom_path(size=1) +
+   scale_color_brewer(palette="Blues") +
+   ylim(c(-10,10)) +
+   xlim(c(-3,8)) +
+   theme_void() +
+   guides(color="none") +
+   geom_mark_ellipse(aes(label = race))
+ 
+# ----------------------------- location -------------------------------------
+
+gw2 + 
+   geom_mark_ellipse(data=PRMR_updated4
+                     , aes(x=xnew, y=y_prmr, color=compare_fct, label=compare_fct))
+
+gw2 + 
+   geom_mark_ellipse(data=filter(PRMR_updated4, compare_fct=="Hispanic")
+                     , aes(x=xnew, y=y_prmr, group=loc, color=compare_fct, label=urban_rural))
+
+gw2 + 
+   geom_mark_ellipse(data=filter(PRMR_updated4, compare_fct=="American Indian or Alaska Native")
+                     , aes(x=xnew, y=y_prmr, group=loc, color=compare_fct, label=urban_rural))
+```
+
