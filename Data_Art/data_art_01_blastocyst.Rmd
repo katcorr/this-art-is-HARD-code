@@ -1,0 +1,314 @@
+---
+title: "data_art_01_blastocyst"
+author: "kat correia"
+output:
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, messages = FALSE, eval=FALSE)
+
+library(tidyverse)
+library(packcircles) ## making circle packing easy 
+library(viridis) ## for color palettes
+library(RColorBrewer) ## for color palettes
+library(ggfx) ## for blur
+library(ggforce) ## for narrative
+```
+
+```{r, eval=TRUE}
+# move up one folder to this-art-HARD to get to parent directory 
+setwd("./..")
+
+# ------------------------- preparing data -------------------------------------
+
+effects_table_pregcomp <- readRDS("Data/effects_table_pregcomp.Rds")
+articles_table_pregcomp <- readRDS("Data/articles_table_pregcomp.Rds")
+
+dat0 <- effects_table_pregcomp %>%
+  left_join(select(articles_table_pregcomp, doi, title, abstract, year), by="doi") %>% 
+  filter(flagged != 1)
+
+dat1 <- dat0 %>%
+  filter(measure=="OR" & ref != "N/A" & doi != "10.1016/j.ajog.2017.05.051") %>%
+  # add extra row for reference group
+  add_row(compare = "white", point = 1, lower = 1, upper = 1) %>%
+  mutate(# very broad groups
+        compare2 = tolower(compare)
+        , compare_broad = case_when(str_detect(compare2, "asian") ~ "asian"
+                , str_detect(compare2, "black|african american") ~ "black"
+                , str_detect(compare2, "hispanic|latin|puerto rican|dominican|mexican")&!str_detect(compare2, "non-hispanic")
+                                      ~ "hispanic"
+                , str_detect(compare2, "american indian/alaska native|native american") ~ "native american"
+                , str_detect(compare2, "other") ~ "other"
+                , str_detect(compare2, "unknown|missing") ~ "unknown")
+        # any covariates?
+        , unadjusted = ifelse(covariates %in% c("none","n/a"),yes="yes",no="no")
+        , for_order = ifelse(compare_broad %in% c("other", "unknown")
+                             , yes=2025, no=year)) %>%
+  # order of rows matters when computing circle location with packcircles package
+  arrange(year) %>%
+  mutate(id = case_when(compare=="white"~ 1
+                        , TRUE ~ row_number()+1)
+         # blur the missing and unknown categories
+        , blurred = ifelse(compare_broad %in% c("other","unknown"), yes=1, no=0)) %>%
+  arrange(id)
+ 
+# what percent of comparison "models" is ref group white or caucasian? 
+# All
+# note: one ref group that's incorrect (flagged article) - says "non-white hispanic"
+# but should be "non-hispanic white"
+# dat1 %>%
+#    group_by(doi, model, comparison) %>%
+#    slice(1) %>%
+#    ungroup() %>%
+#    count(ref)
+
+# create starting x and y and radius for circles
+dat_circ <- circleProgressiveLayout(dat1$point, sizetype='area') %>% 
+  mutate(id = row_number()) %>%
+  left_join(select(dat1, id, lower, upper), by="id") %>%
+  mutate(# compute what radius should be for lower and upper CI values based on area
+         radius_lower = sqrt(lower/pi)
+         , radius_upper = sqrt(upper/pi)) %>%
+  rename(radius_point = radius)
+
+# generate data for ggplot2 
+dat_gg2 <- circleLayoutVertices(dat_circ %>%
+                                  select(x,y,radius=radius_point),npoints=50) %>%
+  inner_join(dat1, by="id")
+
+# create data for white reference circle
+dat_white <- dat_gg2 %>%
+  filter(compare == "white")
+
+# create data for point estimate circles
+dat_gg2_point <- dat_gg2 %>%
+  filter(compare !="white")
+  
+# Now create data for inner and outer circles
+# draw smaller circle, with area relative to lower bound
+dat_gg2_lower <- circleLayoutVertices(dat_circ %>%
+                                        select(x,y,radius=radius_lower), npoints=50) %>%
+  inner_join(dat1, by="id") %>%
+  filter(compare != "white")
+
+# draw larger circle, with area relative to upper bound
+dat_gg2_upper <- circleLayoutVertices(dat_circ %>%
+                                        select(x,y,radius=radius_upper),npoints=50)%>%
+  inner_join(dat1, by="id") %>%
+  filter(compare != "white")
+```
+
+# an inconceivable blastocyst 
+
+```{r, eval=TRUE}
+# ------------------------------- data art exploration #1 ----------------------
+
+# ideas: (1) centering of white; (2) blurred = lesser known; (3) overlapping = interconnected-ness of
+#             the disparities; (4) looks like embryo/blastocyst (out of control...)
+#         (5) area is relative to odds so (once know what represents) can easily
+#                see how much higher odds (larger circles) across outcomes for non-white
+#                   (the contrast isn't as sharp when use area vs. radius)
+#         (6) shading represents variability around point estimate
+
+# unblurred part of plot
+base_plot1 <- ggplot(dat_gg2, aes(x=x,y=y, group=id)) + 
+  geom_path(data=filter(dat_gg2, blurred==0), size=1, color="#ffffff90") +
+  geom_polygon(data=dat_white,fill="white") + 
+  geom_polygon(data=filter(dat_gg2_lower, blurred==0)
+               ,aes(fill=compare_broad)) +
+  geom_polygon(data=filter(dat_gg2_upper, blurred==0)
+               ,aes(fill=compare_broad),alpha=0.5) +
+  scale_fill_manual(values=c("asian" = "#FFEDA0", "black" = "#BD0026"
+                             , "hispanic" = "#FC4E2A"
+                             , "native american" = "#FEB24C"
+                             , "other" = "#FD8D3C", "unknown" = "#800026")) +
+  theme_void() +
+  coord_fixed() + 
+  guides(fill="none", lty="none") +
+  theme(panel.background = element_rect(fill = "black", colour="black")) 
+
+#base_plot1
+
+# add blurred circles
+blastocyst1 <- base_plot1 +
+  with_blur(
+    geom_polygon(data=filter(dat_gg2_upper,blurred==1)
+                 ,aes(fill=compare_broad),alpha=0.5)
+    , sigma = 5
+  ) +
+  with_blur(
+    geom_path(data=filter(dat_gg2_point,blurred==1),size=1, color="#ffffff90") 
+    , sigma = 5
+  ) +
+  with_blur(
+    geom_polygon(data=filter(dat_gg2_lower,blurred==1),aes(fill=compare_broad))
+    , sigma = 5
+  ) 
+
+blastocyst1
+```
+
+# narrative
+
+```{r, eval=TRUE}
+# ------------------------- white as reference group -------------------------
+
+desc <- 'All of the studies used \n “caucasian”, “white”, or \n “non-hispanic white” \n as the reference group.'
+#desc <- 'All of the studies used “caucasian”, “white”, or “non-hispanic white” as the reference group.'
+
+dat_white2 <- dat_white %>%
+  mutate(desc=desc)
+
+ggplot(dat_gg2, aes(x=x,y=y, group=id)) + 
+  geom_path(data=filter(dat_gg2, blurred==0), size=1, color="black") +
+  geom_polygon(data=dat_white,fill="white") + 
+  theme_void() +
+  #coord_fixed() + #ratio=1,xlim=c(-15,20),ylim=c(-15,20)) +
+  guides(fill="none", lty="none") +
+  theme(panel.background = element_rect(fill = "black", colour="black")) +
+  geom_mark_ellipse(data=dat_white, aes(label = "Reference (1.00)", description=desc)
+                    , color = "black" # ellipse color
+                    , label.colour = "black" # color of text in box
+                    #, label.fill = "white"
+                    , con.colour = "white" # color of line connecting box to ellipse
+                    , label.fontsize = 12
+                    , label.width = NULL
+                    , con.arrow  = arrow(angle = 30
+                                         , length = unit(0.1, "inches")
+                                         , ends = "last", type = "open"))
+ 
+# ---------------------- colors -----------------------------------------------
+
+color_legend <- data.frame(x = c(2,4,6,8,10), y = rep(10,5)
+           , color=c("asian", "hispanic", "black", "other", "unknown")
+           , color_long = c('"asian" \n "asian and pacific islander" \n "non-hispanic, asian" \n "non-hispanic, asian/others"'
+                            , '"foreign-born hispanic" \n "foreign dominican" \n "foreign mexican" \n "hispanic" \n "puerto rican" \n "us-born hispanic"'
+                            , '"african american" \n "black" \n "non-hispanic black"'
+                            , '"other" \n "non-hispanic, all others"'
+                            , '"unknown" \n "missing"')
+           , blurred=c(0,0,0,1,1)) %>%
+  mutate(y2 = y - 0.5)
+
+ggplot() +
+  geom_point(data=filter(color_legend, blurred==0), aes(x=x,y=y,color=color)
+             , size=10) +
+  scale_color_manual(values=c("asian" = "#FFEDA0", "black" = "#BD0026", "hispanic" = "#FC4E2A" #, "native american" = "#FEB24C"
+                      , "other" = "#FD8D3C", "unknown" = "#800026")) +
+  theme_void() +
+  theme(panel.background = element_rect(fill = "black", colour="black")) +
+  with_blur(
+     geom_point(data=filter(color_legend,blurred==1)
+                , aes(x=x,y=y,color=color), size=10) 
+    , sigma = 5
+  ) +
+  guides(color="none") +
+  geom_mark_ellipse(data=color_legend, aes(x=x, y=y, label=color, description=color_long)
+                    , color = "black" # ellipse color
+                    , label.colour = "black" # color of text in box
+                    #, label.fill = "white"
+                    , con.colour = "white" # color of line connecting box to ellipse
+                    , label.fontsize = 12
+                    , label.width = NULL)
+
+# ---------------------- circle elements ---------------------------------------
+
+# lower bound of CI
+ggplot(dat_gg2, aes(x=x,y=y, group=id)) + 
+  geom_path(data=filter(dat_gg2, blurred==0), size=1, color="black") +
+  geom_polygon(data=dat_white,fill="white") + 
+  #geom_path(data=filter(dat_gg2, id==70), size=1, color="#ffffff90") +
+  geom_polygon(data=filter(dat_gg2_lower, id==70), fill="#BD0026") +
+  #geom_polygon(data=filter(dat_gg2_upper, id==70), fill="#BD0026",alpha=0.5) +
+  theme_void() +
+  coord_fixed() + #ratio=1,xlim=c(-15,20),ylim=c(-15,20)) +
+  guides(fill="none", lty="none") +
+  theme(panel.background = element_rect(fill = "black", colour="black")) +
+  geom_mark_ellipse(data=filter(dat_gg2_lower, id==70)
+                    , aes(label = "lower bound of 95% CI", description="area of opaque circle is relative to lower bound of 95% confidence interval for the odds ratio (e.g., here, 1.46)")
+                    , color = "black" # ellipse color
+                    , label.colour = "black" # color of text in box
+                    #, label.fill = "white"
+                    , con.colour = "white" # color of line connecting box to ellipse
+                    , label.fontsize = 12
+                    , label.width = 75
+                    , con.arrow  = arrow(angle = 30
+                                         , length = unit(0.1, "inches")
+                                         , ends = "last", type = "open"))
+
+# point estimate
+ggplot(dat_gg2, aes(x=x,y=y, group=id)) + 
+  geom_path(data=filter(dat_gg2, blurred==0), size=1, color="black") +
+  geom_polygon(data=dat_white,fill="white") + 
+  geom_path(data=filter(dat_gg2, id==70), size=1, color="#ffffff90") +
+  #geom_polygon(data=filter(dat_gg2_lower, id==70), fill="#BD0026") +
+  #geom_polygon(data=filter(dat_gg2_upper, id==70), fill="#BD0026",alpha=0.5) +
+  theme_void() +
+  coord_fixed() + #ratio=1,xlim=c(-15,20),ylim=c(-15,20)) +
+  guides(fill="none", lty="none") +
+  theme(panel.background = element_rect(fill = "black", colour="black")) +
+  geom_mark_ellipse(data=filter(dat_gg2, id==70)
+                    , aes(label = "point estimate", description="area of ring is relative to the point estimate for the odds ratio (e.g., here, 2.78)")
+                    , color = "black" # ellipse color
+                    , label.colour = "black" # color of text in box
+                    #, label.fill = "white"
+                    , con.colour = "white" # color of line connecting box to ellipse
+                    , label.fontsize = 12
+                    , label.width = 75
+                    , con.arrow  = arrow(angle = 30
+                                         , length = unit(0.1, "inches")
+                                         , ends = "last", type = "open"))
+
+# upper bound of CI
+ggplot(dat_gg2, aes(x=x,y=y, group=id)) + 
+  geom_path(data=filter(dat_gg2, blurred==0), size=1, color="black") +
+  geom_polygon(data=dat_white,fill="white") + 
+  #geom_path(data=filter(dat_gg2, id==70), size=1, color="#ffffff90") +
+  #geom_polygon(data=filter(dat_gg2_lower, id==70), fill="#BD0026") +
+  geom_polygon(data=filter(dat_gg2_upper, id==70), fill="#BD0026",alpha=0.5) +
+  theme_void() +
+  coord_fixed() + #ratio=1,xlim=c(-15,20),ylim=c(-15,20)) +
+  guides(fill="none", lty="none") +
+  theme(panel.background = element_rect(fill = "black", colour="black")) +
+  geom_mark_ellipse(data=filter(dat_gg2_upper, id==70)
+                    , aes(label = "upper bound of 95% CI", description="area of transparent circle is relative to upper bound of 95% confidence interval for the odds ratio (e.g., here, 5.27)")
+                    , color = "black" # ellipse color
+                    , label.colour = "black" # color of text in box
+                    #, label.fill = "white"
+                    , con.colour = "white" # color of line connecting box to ellipse
+                    , label.fontsize = 12
+                    , label.width = 75
+                    , con.arrow  = arrow(angle = 30
+                                         , length = unit(0.1, "inches")
+                                         , ends = "last", type = "open"))
+
+# all together
+ggplot(dat_gg2, aes(x=x,y=y, group=id)) + 
+  geom_path(data=filter(dat_gg2, blurred==0), size=1, color="black") +
+  geom_polygon(data=dat_white,fill="white") + 
+  geom_path(data=filter(dat_gg2, id==70), size=1, color="#ffffff90") +
+  geom_polygon(data=filter(dat_gg2_lower, id==70), fill="#BD0026") +
+  geom_polygon(data=filter(dat_gg2_upper, id==70), fill="#BD0026",alpha=0.5) +
+  theme_void() +
+  coord_fixed() + #ratio=1,xlim=c(-15,20),ylim=c(-15,20)) +
+  guides(fill="none", lty="none") +
+  theme(panel.background = element_rect(fill = "black", colour="black")) +
+  geom_mark_ellipse(data=filter(dat_gg2_upper, id==70)
+                    , aes(label="together", description="e.g., among pregnant military service members giving birth at military treatment facilities, adult ICU admission was 2.78 times higher among 'Black' women as compared to 'White' women (95% CI: 1.46, 5.27)")
+                    , color = "black" # ellipse color
+                    , label.colour = "black" # color of text in box
+                    #, label.fill = "white"
+                    , con.colour = "white" # color of line connecting box to ellipse
+                    , label.fontsize = 12
+                    , label.width = NULL
+                    , con.arrow  = arrow(angle = 30
+                                         , length = unit(0.1, "inches")
+                                         , ends = "last", type = "open"))
+```
+
+```{r}
+# to do: automate narrative to go through each circle and identify info for that circle
+# (or make it interactive so can hover over a circle to see more information about that OR)
+```
+
